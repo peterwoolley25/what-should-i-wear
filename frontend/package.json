@@ -3,10 +3,13 @@
   "version": "1.0.0",
   "description": "",
   "type": "module",
+  "homepage": "https://peterwoolley25.github.io/what-should-i-wear/",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "predeploy": "npm run build",
+    "deploy": "gh-pages -d dist -r https://github.com/peterwoolley25/what-should-i-wear.git"
   },
   "keywords": [],
   "author": "",
@@ -21,6 +24,7 @@
     "vite": "^7.3.0"
   },
   "devDependencies": {
-    "@vitejs/plugin-react": "^5.1.2"
+    "@vitejs/plugin-react": "^5.1.2",
+    "gh-pages": "^6.2.0"
   }
 }
