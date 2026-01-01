@@ -1,5 +1,5 @@
 import React from 'react'
-import StandaloneApp from './StandaloneApp'
+import StandaloneApp from './StandAloneApp'
 
 function App() {
   return <StandaloneApp />
