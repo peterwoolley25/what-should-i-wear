@@ -327,6 +327,9 @@ export default function WhatShouldIWear() {
   const [showFeedback, setShowFeedback] = useState(false);
   const [savedRoutes, setSavedRoutes] = useState([]);
   const [locationCoords, setLocationCoords] = useState(null);
+  const [locationSuggestions, setLocationSuggestions] = useState([]);
+  const [activeInputIndex, setActiveInputIndex] = useState(null);
+  const [searchTimeout, setSearchTimeout] = useState(null);
 
   // Load saved routes on mount
   useEffect(() => {
@@ -357,10 +360,61 @@ export default function WhatShouldIWear() {
     }
   };
 
+  const searchLocationSuggestions = async (query) => {
+    if (!query || query.length < 2) {
+      setLocationSuggestions([]);
+      return;
+    }
+
+    try {
+      const response = await fetch(
+        `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query)}&count=5&language=en&format=json`
+      );
+      const data = await response.json();
+
+      if (data.results) {
+        const suggestions = data.results.map(result => ({
+          name: result.name,
+          country: result.country,
+          admin1: result.admin1,
+          lat: result.latitude,
+          lon: result.longitude,
+          displayName: `${result.name}${result.admin1 ? ', ' + result.admin1 : ''}, ${result.country}`
+        }));
+        setLocationSuggestions(suggestions);
+      } else {
+        setLocationSuggestions([]);
+      }
+    } catch (error) {
+      console.error('Location search error:', error);
+      setLocationSuggestions([]);
+    }
+  };
+
   const handleLocationChange = (index, value) => {
     const newLocations = [...locations];
     newLocations[index] = value;
     setLocations(newLocations);
+    setActiveInputIndex(index);
+
+    // Clear previous timeout
+    if (searchTimeout) {
+      clearTimeout(searchTimeout);
+    }
+
+    // Debounce the search
+    const timeout = setTimeout(() => {
+      searchLocationSuggestions(value);
+    }, 300);
+    setSearchTimeout(timeout);
+  };
+
+  const selectLocationSuggestion = (index, suggestion) => {
+    const newLocations = [...locations];
+    newLocations[index] = suggestion.displayName;
+    setLocations(newLocations);
+    setLocationSuggestions([]);
+    setActiveInputIndex(null);
   };
 
   const handleRemoveLocation = (index) => {
@@ -480,38 +534,83 @@ export default function WhatShouldIWear() {
               <>
                 {/* Route Input */}
                 <div style={{ marginBottom: '40px' }}>
-                  <h2 style={{ fontSize: '1.8rem', marginBottom: '20px', color: '#333' }}>2. Enter Your Route</h2>
+                  <h2 style={{ fontSize: '1.8rem', marginBottom: '20px', color: '#333' }}>2. Enter Your Location</h2>
                   {locations.map((location, index) => (
-                    <div key={index} style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
-                      <input
-                        type="text"
-                        placeholder={`Location ${index + 1} (e.g., San Francisco, CA)`}
-                        value={location}
-                        onChange={(e) => handleLocationChange(index, e.target.value)}
-                        style={{
-                          flex: 1,
-                          padding: '12px',
-                          border: '2px solid #e0e0e0',
-                          borderRadius: '8px',
-                          fontSize: '1rem'
-                        }}
-                      />
-                      {locations.length > 1 && (
-                        <button
-                          onClick={() => handleRemoveLocation(index)}
-                          style={{
-                            padding: '12px 16px',
-                            background: '#ff4444',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '8px',
-                            cursor: 'pointer',
-                            fontSize: '1rem'
-                          }}
-                        >
-                          ✕
-                        </button>
-                      )}
+                    <div key={index} style={{ position: 'relative', marginBottom: '10px' }}>
+                      <div style={{ display: 'flex', gap: '10px' }}>
+                        <div style={{ flex: 1, position: 'relative' }}>
+                          <input
+                            type="text"
+                            placeholder="Start typing a city name..."
+                            value={location}
+                            onChange={(e) => handleLocationChange(index, e.target.value)}
+                            onFocus={() => setActiveInputIndex(index)}
+                            style={{
+                              width: '100%',
+                              padding: '12px',
+                              border: '2px solid #e0e0e0',
+                              borderRadius: '8px',
+                              fontSize: '1rem',
+                              boxSizing: 'border-box'
+                            }}
+                          />
+                          {/* Autocomplete Dropdown */}
+                          {activeInputIndex === index && locationSuggestions.length > 0 && (
+                            <div style={{
+                              position: 'absolute',
+                              top: '100%',
+                              left: 0,
+                              right: 0,
+                              background: 'white',
+                              border: '2px solid #667eea',
+                              borderRadius: '8px',
+                              marginTop: '4px',
+                              maxHeight: '200px',
+                              overflowY: 'auto',
+                              zIndex: 1000,
+                              boxShadow: '0 4px 12px rgba(0,0,0,0.15)'
+                            }}>
+                              {locationSuggestions.map((suggestion, suggIndex) => (
+                                <div
+                                  key={suggIndex}
+                                  onClick={() => selectLocationSuggestion(index, suggestion)}
+                                  style={{
+                                    padding: '12px',
+                                    cursor: 'pointer',
+                                    borderBottom: suggIndex < locationSuggestions.length - 1 ? '1px solid #f0f0f0' : 'none',
+                                    transition: 'background 0.2s'
+                                  }}
+                                  onMouseEnter={(e) => e.currentTarget.style.background = '#f5f5f5'}
+                                  onMouseLeave={(e) => e.currentTarget.style.background = 'white'}
+                                >
+                                  <div style={{ fontWeight: '600', color: '#333' }}>
+                                    {suggestion.name}
+                                  </div>
+                                  <div style={{ fontSize: '0.85rem', color: '#666' }}>
+                                    {suggestion.admin1 && `${suggestion.admin1}, `}{suggestion.country}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        {locations.length > 1 && (
+                          <button
+                            onClick={() => handleRemoveLocation(index)}
+                            style={{
+                              padding: '12px 16px',
+                              background: '#ff4444',
+                              color: 'white',
+                              border: 'none',
+                              borderRadius: '8px',
+                              cursor: 'pointer',
+                              fontSize: '1rem'
+                            }}
+                          >
+                            ✕
+                          </button>
+                        )}
+                      </div>
                     </div>
                   ))}
                   {locations.length < 3 && (
