@@ -28,19 +28,86 @@ const EFFORT_LEVELS = [
   { id: 'all-out', name: 'All Out', description: 'Maximum effort', heatFactor: 1.6 }
 ];
 
-// Mock weather data generator (in production, use real API like OpenWeatherMap)
+// Geocode location to get coordinates
+const geocodeLocation = async (locationName) => {
+  try {
+    const response = await fetch(
+      `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(locationName)}&count=1&language=en&format=json`
+    );
+    const data = await response.json();
+    if (data.results && data.results.length > 0) {
+      return {
+        lat: data.results[0].latitude,
+        lon: data.results[0].longitude,
+        name: data.results[0].name
+      };
+    }
+    return null;
+  } catch (error) {
+    console.error('Geocoding error:', error);
+    return null;
+  }
+};
+
+// Fetch real weather data from Open-Meteo API (free, no API key required)
+const fetchWeatherData = async (locations, startTime) => {
+  try {
+    // Get coordinates for the first location
+    const coords = await geocodeLocation(locations[0]);
+    if (!coords) {
+      throw new Error('Could not find location');
+    }
+
+    // Fetch 5 hours of weather data starting from startTime
+    const response = await fetch(
+      `https://api.open-meteo.com/v1/forecast?latitude=${coords.lat}&longitude=${coords.lon}&hourly=temperature_2m,precipitation_probability,wind_speed_10m,relative_humidity_2m,weather_code&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=auto`
+    );
+    const data = await response.json();
+
+    // Parse start time and get 5 hours of data
+    const startDate = new Date(startTime);
+    const weatherData = [];
+
+    for (let i = 0; i < 5; i++) {
+      const currentTime = new Date(startDate.getTime() + i * 60 * 60 * 1000);
+      const hourIndex = data.hourly.time.findIndex(t => {
+        const apiTime = new Date(t);
+        return apiTime.getTime() >= currentTime.getTime();
+      });
+
+      if (hourIndex !== -1) {
+        weatherData.push({
+          location: coords.name,
+          time: currentTime.toISOString(),
+          temperature: Math.round(data.hourly.temperature_2m[hourIndex]),
+          windSpeed: Math.round(data.hourly.wind_speed_10m[hourIndex]),
+          precipitationChance: data.hourly.precipitation_probability[hourIndex] || 0,
+          humidity: data.hourly.relative_humidity_2m[hourIndex],
+          weatherCode: data.hourly.weather_code[hourIndex]
+        });
+      }
+    }
+
+    return weatherData;
+  } catch (error) {
+    console.error('Weather fetch error:', error);
+    // Fallback to mock data if API fails
+    return generateMockWeather(locations, startTime);
+  }
+};
+
+// Fallback mock weather data generator
 const generateMockWeather = (locations, startTime) => {
-  return locations.map((loc, index) => {
+  return Array.from({ length: 5 }, (_, i) => {
     const baseTemp = 50 + Math.random() * 30;
-    const timeOffset = index * 30; // 30 minutes between locations
     return {
-      location: loc,
-      time: new Date(new Date(startTime).getTime() + timeOffset * 60000).toISOString(),
+      location: locations[0],
+      time: new Date(new Date(startTime).getTime() + i * 60 * 60 * 1000).toISOString(),
       temperature: Math.round(baseTemp + (Math.random() - 0.5) * 10),
       windSpeed: Math.round(5 + Math.random() * 15),
-      precipitation: Math.random() > 0.7 ? Math.round(Math.random() * 50) : 0,
+      precipitationChance: Math.round(Math.random() * 100),
       humidity: Math.round(40 + Math.random() * 40),
-      conditions: Math.random() > 0.7 ? 'rainy' : Math.random() > 0.5 ? 'cloudy' : 'sunny'
+      weatherCode: 0
     };
   });
 };
@@ -49,7 +116,7 @@ const generateMockWeather = (locations, startTime) => {
 const generateRecommendations = (activity, weatherData, effortLevel, historicalFeedback = []) => {
   const avgTemp = weatherData.reduce((sum, w) => sum + w.temperature, 0) / weatherData.length;
   const maxWind = Math.max(...weatherData.map(w => w.windSpeed));
-  const hasRain = weatherData.some(w => w.precipitation > 0);
+  const hasRain = weatherData.some(w => w.precipitationChance > 30);
   const effort = EFFORT_LEVELS.find(e => e.id === effortLevel);
   
   // Adjust felt temperature based on effort
@@ -289,19 +356,20 @@ export default function WhatShouldIWear() {
     setLocations(newLocations.length === 0 ? [''] : newLocations);
   };
 
-  const handleGetRecommendations = () => {
+  const handleGetRecommendations = async () => {
     const validLocations = locations.filter(loc => loc.trim());
     if (!validLocations.length || !startTime || !selectedActivity || !selectedEffort) {
       alert('Please fill in all fields');
       return;
     }
 
-    const weather = generateMockWeather(validLocations, startTime);
+    // Show loading state
+    const weather = await fetchWeatherData(validLocations, startTime);
     setWeatherData(weather);
-    
+
     const recs = generateRecommendations(selectedActivity, weather, selectedEffort);
     setRecommendations(recs);
-    
+
     setStep(2);
   };
 
@@ -586,23 +654,29 @@ export default function WhatShouldIWear() {
 
         {/* Weather Chart */}
         <div style={{ background: 'white', borderRadius: '20px', padding: '30px', marginBottom: '20px', boxShadow: '0 2px 10px rgba(0,0,0,0.1)' }}>
-          <h2 style={{ fontSize: '1.8rem', marginBottom: '20px', color: '#333' }}>Weather Forecast Along Route</h2>
+          <h2 style={{ fontSize: '1.8rem', marginBottom: '20px', color: '#333' }}>Weather Forecast (5 Hours from Start)</h2>
           <ResponsiveContainer width="100%" height={300}>
             <LineChart data={weatherData}>
               <CartesianGrid strokeDasharray="3 3" />
-              <XAxis 
-                dataKey="time" 
+              <XAxis
+                dataKey="time"
                 tickFormatter={(time) => new Date(time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
               />
               <YAxis yAxisId="left" label={{ value: 'Temperature (°F)', angle: -90, position: 'insideLeft' }} />
-              <YAxis yAxisId="right" orientation="right" label={{ value: 'Wind (mph)', angle: 90, position: 'insideRight' }} />
-              <Tooltip 
+              <YAxis yAxisId="right" orientation="right" label={{ value: 'Wind (mph) / Precip %', angle: 90, position: 'insideRight' }} />
+              <Tooltip
                 labelFormatter={(time) => new Date(time).toLocaleString()}
-                formatter={(value, name) => [value, name === 'temperature' ? 'Temp (°F)' : name === 'windSpeed' ? 'Wind (mph)' : name]}
+                formatter={(value, name) => {
+                  if (name === 'temperature') return [value, 'Temp (°F)'];
+                  if (name === 'windSpeed') return [value, 'Wind (mph)'];
+                  if (name === 'precipitationChance') return [value + '%', 'Precip Chance'];
+                  return [value, name];
+                }}
               />
               <Legend />
               <Line yAxisId="left" type="monotone" dataKey="temperature" stroke="#ff6b6b" strokeWidth={2} name="Temperature" />
               <Line yAxisId="right" type="monotone" dataKey="windSpeed" stroke="#4ecdc4" strokeWidth={2} name="Wind Speed" />
+              <Line yAxisId="right" type="monotone" dataKey="precipitationChance" stroke="#3b82f6" strokeWidth={2} name="Precip Chance %" strokeDasharray="5 5" />
             </LineChart>
           </ResponsiveContainer>
         </div>
