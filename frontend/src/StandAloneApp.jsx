@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, Polyline } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import 'leaflet/dist/leaflet.css';
 
@@ -27,6 +27,17 @@ const EFFORT_LEVELS = [
   { id: 'tempo', name: 'Tempo', description: 'Comfortably hard', heatFactor: 1.3 },
   { id: 'all-out', name: 'All Out', description: 'Maximum effort', heatFactor: 1.6 }
 ];
+
+// Component to update map center when coordinates change
+function MapUpdater({ center }) {
+  const map = useMap();
+  useEffect(() => {
+    if (center) {
+      map.setView(center, 12);
+    }
+  }, [center, map]);
+  return null;
+}
 
 // Geocode location to get coordinates
 const geocodeLocation = async (locationName) => {
@@ -88,11 +99,11 @@ const fetchWeatherData = async (locations, startTime) => {
       }
     }
 
-    return weatherData;
+    return { weatherData, coords };
   } catch (error) {
     console.error('Weather fetch error:', error);
     // Fallback to mock data if API fails
-    return generateMockWeather(locations, startTime);
+    return { weatherData: generateMockWeather(locations, startTime), coords: null };
   }
 };
 
@@ -315,6 +326,7 @@ export default function WhatShouldIWear() {
   const [recommendations, setRecommendations] = useState([]);
   const [showFeedback, setShowFeedback] = useState(false);
   const [savedRoutes, setSavedRoutes] = useState([]);
+  const [locationCoords, setLocationCoords] = useState(null);
 
   // Load saved routes on mount
   useEffect(() => {
@@ -363,9 +375,10 @@ export default function WhatShouldIWear() {
       return;
     }
 
-    // Show loading state
-    const weather = await fetchWeatherData(validLocations, startTime);
+    // Fetch weather data and coordinates
+    const { weatherData: weather, coords } = await fetchWeatherData(validLocations, startTime);
     setWeatherData(weather);
+    setLocationCoords(coords);
 
     const recs = generateRecommendations(selectedActivity, weather, selectedEffort);
     setRecommendations(recs);
@@ -683,23 +696,36 @@ export default function WhatShouldIWear() {
 
         {/* Map */}
         <div style={{ background: 'white', borderRadius: '20px', padding: '30px', marginBottom: '20px', boxShadow: '0 2px 10px rgba(0,0,0,0.1)' }}>
-          <h2 style={{ fontSize: '1.8rem', marginBottom: '20px', color: '#333' }}>Route Map</h2>
+          <h2 style={{ fontSize: '1.8rem', marginBottom: '20px', color: '#333' }}>Location Map</h2>
           <div style={{ height: '400px', borderRadius: '12px', overflow: 'hidden' }}>
-            <MapContainer
-              center={[37.7749, -122.4194]}
-              zoom={10}
-              style={{ height: '100%', width: '100%' }}
-            >
-              <TileLayer
-                attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-              />
-              {locations.filter(l => l).map((location, index) => (
-                <Marker key={index} position={[37.7749 + index * 0.1, -122.4194 + index * 0.1]}>
-                  <Popup>{location}</Popup>
+            {locationCoords ? (
+              <MapContainer
+                center={[locationCoords.lat, locationCoords.lon]}
+                zoom={12}
+                style={{ height: '100%', width: '100%' }}
+                key={`${locationCoords.lat}-${locationCoords.lon}`}
+              >
+                <TileLayer
+                  attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+                  url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                />
+                <MapUpdater center={[locationCoords.lat, locationCoords.lon]} />
+                <Marker position={[locationCoords.lat, locationCoords.lon]}>
+                  <Popup>{locationCoords.name}</Popup>
                 </Marker>
-              ))}
-            </MapContainer>
+              </MapContainer>
+            ) : (
+              <div style={{
+                height: '100%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                background: '#f5f5f5',
+                color: '#666'
+              }}>
+                Map will display after location is geocoded
+              </div>
+            )}
           </div>
         </div>
 
