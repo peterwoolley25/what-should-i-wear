@@ -61,12 +61,15 @@ const geocodeLocation = async (locationName) => {
 };
 
 // Fetch real weather data from Open-Meteo API (free, no API key required)
-const fetchWeatherData = async (locations, startTime) => {
+const fetchWeatherData = async (locations, startTime, providedCoords = null) => {
   try {
-    // Get coordinates for the first location
-    const coords = await geocodeLocation(locations[0]);
+    // Use provided coordinates or geocode the location
+    let coords = providedCoords;
     if (!coords) {
-      throw new Error('Could not find location');
+      coords = await geocodeLocation(locations[0]);
+      if (!coords) {
+        throw new Error('Could not find location');
+      }
     }
 
     // Fetch 5 hours of weather data starting from startTime
@@ -415,6 +418,13 @@ export default function WhatShouldIWear() {
     setLocations(newLocations);
     setLocationSuggestions([]);
     setActiveInputIndex(null);
+
+    // Store the coordinates for the selected location
+    setLocationCoords({
+      lat: suggestion.lat,
+      lon: suggestion.lon,
+      name: suggestion.displayName
+    });
   };
 
   const handleRemoveLocation = (index) => {
@@ -429,10 +439,18 @@ export default function WhatShouldIWear() {
       return;
     }
 
-    // Fetch weather data and coordinates
-    const { weatherData: weather, coords } = await fetchWeatherData(validLocations, startTime);
+    if (!locationCoords) {
+      alert('Please select a location from the dropdown suggestions');
+      return;
+    }
+
+    // Fetch weather data using stored coordinates
+    const { weatherData: weather, coords } = await fetchWeatherData(validLocations, startTime, locationCoords);
     setWeatherData(weather);
-    setLocationCoords(coords);
+    // Update coords in case they changed
+    if (coords) {
+      setLocationCoords(coords);
+    }
 
     const recs = generateRecommendations(selectedActivity, weather, selectedEffort);
     setRecommendations(recs);
