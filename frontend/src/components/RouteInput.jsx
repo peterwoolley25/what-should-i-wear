@@ -7,6 +7,7 @@ function RouteInput({ onRouteChange }) {
   const [locations, setLocations] = useState([''])
   const [startTime, setStartTime] = useState('')
   const [gpxFile, setGpxFile] = useState(null)
+  const [gpxData, setGpxData] = useState(null) // Store parsed GPX data
   const [isParsingGPX, setIsParsingGPX] = useState(false)
   const [gpxError, setGpxError] = useState(null)
 
@@ -46,6 +47,11 @@ function RouteInput({ onRouteChange }) {
     try {
       const { points, metadata } = await parseGPXFile(file)
       setGpxFile(file)
+
+      // Store parsed GPX data in state
+      const parsedData = { points, metadata }
+      setGpxData(parsedData)
+
       onRouteChange({
         locations,
         startTime,
@@ -57,6 +63,7 @@ function RouteInput({ onRouteChange }) {
     } catch (error) {
       setGpxError(error.message)
       setGpxFile(null)
+      setGpxData(null)
       onRouteChange({ locations, startTime, gpxFile: null, inputMethod: 'search' })
     } finally {
       setIsParsingGPX(false)
@@ -65,7 +72,21 @@ function RouteInput({ onRouteChange }) {
 
   const handleStartTimeChange = (e) => {
     setStartTime(e.target.value)
-    onRouteChange({ locations, startTime: e.target.value, gpxFile, inputMethod })
+
+    // Include GPX data if in GPX mode
+    const changeData = {
+      locations,
+      startTime: e.target.value,
+      gpxFile,
+      inputMethod
+    }
+
+    if (inputMethod === 'gpx' && gpxData) {
+      changeData.gpxPoints = gpxData.points
+      changeData.gpxMetadata = gpxData.metadata
+    }
+
+    onRouteChange(changeData)
   }
 
   const handleInputMethodChange = (method) => {
@@ -75,15 +96,23 @@ function RouteInput({ onRouteChange }) {
     // Clear GPX data when switching to search mode
     if (method === 'search') {
       setGpxFile(null)
+      setGpxData(null)
     }
 
-    onRouteChange({
+    const changeData = {
       locations,
       startTime,
       gpxFile: method === 'gpx' ? gpxFile : null,
-      gpxPoints: method === 'gpx' && gpxFile ? undefined : [],
       inputMethod: method
-    })
+    }
+
+    // Include GPX data if in GPX mode and data exists
+    if (method === 'gpx' && gpxData) {
+      changeData.gpxPoints = gpxData.points
+      changeData.gpxMetadata = gpxData.metadata
+    }
+
+    onRouteChange(changeData)
   }
 
   return (
