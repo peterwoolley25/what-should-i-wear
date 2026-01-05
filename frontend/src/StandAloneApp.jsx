@@ -740,7 +740,12 @@ export default function WhatShouldIWear() {
 
                 <button
                   onClick={handleGetRecommendations}
-                  disabled={!selectedActivity || !selectedEffort || !locations.some(l => l.trim()) || !startTime}
+                  disabled={
+                    !selectedActivity ||
+                    !selectedEffort ||
+                    !startTime ||
+                    (inputMethod === 'gpx' ? sampledGpxPoints.length === 0 : !locations.some(l => l.trim()))
+                  }
                   style={{
                     width: '100%',
                     padding: '18px',
@@ -750,8 +755,18 @@ export default function WhatShouldIWear() {
                     borderRadius: '12px',
                     fontSize: '1.2rem',
                     fontWeight: '600',
-                    cursor: !selectedActivity || !selectedEffort || !locations.some(l => l.trim()) || !startTime ? 'not-allowed' : 'pointer',
-                    opacity: !selectedActivity || !selectedEffort || !locations.some(l => l.trim()) || !startTime ? 0.5 : 1,
+                    cursor: (
+                      !selectedActivity ||
+                      !selectedEffort ||
+                      !startTime ||
+                      (inputMethod === 'gpx' ? sampledGpxPoints.length === 0 : !locations.some(l => l.trim()))
+                    ) ? 'not-allowed' : 'pointer',
+                    opacity: (
+                      !selectedActivity ||
+                      !selectedEffort ||
+                      !startTime ||
+                      (inputMethod === 'gpx' ? sampledGpxPoints.length === 0 : !locations.some(l => l.trim()))
+                    ) ? 0.5 : 1,
                     boxShadow: '0 4px 12px rgba(102, 126, 234, 0.3)'
                   }}
                 >

@@ -71,10 +71,17 @@ function RouteInput({ onRouteChange }) {
   const handleInputMethodChange = (method) => {
     setInputMethod(method)
     setGpxError(null)
+
+    // Clear GPX data when switching to search mode
+    if (method === 'search') {
+      setGpxFile(null)
+    }
+
     onRouteChange({
       locations,
       startTime,
       gpxFile: method === 'gpx' ? gpxFile : null,
+      gpxPoints: method === 'gpx' && gpxFile ? undefined : [],
       inputMethod: method
     })
   }
