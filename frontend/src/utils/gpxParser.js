@@ -1,4 +1,7 @@
-import gpxParser from 'gpxparser';
+import gpxParserModule from 'gpxparser';
+
+// Handle both ESM and CommonJS exports
+const gpxParser = gpxParserModule.default || gpxParserModule;
 
 /**
  * Parse a GPX file and extract waypoints and trackpoints
@@ -12,23 +15,34 @@ export const parseGPXFile = async (file) => {
     reader.onload = (e) => {
       try {
         const gpx = new gpxParser();
-        gpx.parse(e.target.result);
+        const xmlContent = e.target.result;
+
+        // Validate that we have XML content
+        if (!xmlContent || typeof xmlContent !== 'string') {
+          reject(new Error('File is empty or not readable'));
+          return;
+        }
+
+        // Parse the GPX file
+        gpx.parse(xmlContent);
 
         const points = [];
 
         // Extract track points
         if (gpx.tracks && gpx.tracks.length > 0) {
           gpx.tracks.forEach((track, trackIdx) => {
-            track.points.forEach((point, pointIdx) => {
-              points.push({
-                lat: point.lat,
-                lon: point.lon,
-                elevation: point.ele,
-                time: point.time,
-                name: `${track.name || 'Track'} - Point ${pointIdx + 1}`,
-                index: points.length
+            if (track.points && track.points.length > 0) {
+              track.points.forEach((point, pointIdx) => {
+                points.push({
+                  lat: point.lat,
+                  lon: point.lon,
+                  elevation: point.ele,
+                  time: point.time,
+                  name: `${track.name || 'Track'} - Point ${pointIdx + 1}`,
+                  index: points.length
+                });
               });
-            });
+            }
           });
         }
 
@@ -56,11 +70,12 @@ export const parseGPXFile = async (file) => {
           metadata: {
             name: gpx.metadata?.name,
             totalPoints: points.length,
-            bounds: gpx.tracks[0]?.bounds
+            bounds: gpx.tracks[0]?.distance
           }
         });
       } catch (error) {
-        reject(new Error('Invalid GPX file format'));
+        console.error('GPX parsing error:', error);
+        reject(new Error(`Invalid GPX file format: ${error.message}`));
       }
     };
 
