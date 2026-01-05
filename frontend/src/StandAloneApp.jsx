@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { MapContainer, TileLayer, Marker, Popup, useMap, Polyline, CircleMarker } from 'react-leaflet';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Area, AreaChart, ComposedChart } from 'recharts';
 import 'leaflet/dist/leaflet.css';
+import RouteInput from './components/RouteInput';
+import { samplePoints } from './utils/gpxParser';
 
 // Fix Leaflet default marker icons
 import L from 'leaflet';
@@ -110,6 +112,67 @@ const fetchWeatherData = async (locations, startTime, providedCoords = null) => 
   }
 };
 
+// Fetch weather data for multiple GPX points and aggregate
+const fetchGPXWeatherData = async (sampledPoints, startTime) => {
+  try {
+    // Fetch weather for each sampled point in parallel
+    const weatherPromises = sampledPoints.map(point =>
+      fetchWeatherData(
+        [point.name || `Point ${point.index}`],
+        startTime,
+        {
+          lat: point.lat,
+          lon: point.lon,
+          name: point.name || `Lat ${point.lat.toFixed(2)}, Lon ${point.lon.toFixed(2)}`
+        }
+      )
+    );
+
+    const allWeatherResults = await Promise.all(weatherPromises);
+
+    // Aggregate weather data by time slot
+    const aggregatedWeather = [];
+    for (let hourIndex = 0; hourIndex < 5; hourIndex++) {
+      const hourDataPoints = allWeatherResults
+        .map(result => result.weatherData[hourIndex])
+        .filter(Boolean);
+
+      if (hourDataPoints.length > 0) {
+        const temps = hourDataPoints.map(d => d.temperature);
+        const winds = hourDataPoints.map(d => d.windSpeed);
+        const precips = hourDataPoints.map(d => d.precipitationChance);
+        const humidities = hourDataPoints.map(d => d.humidity);
+
+        aggregatedWeather.push({
+          location: 'GPX Route',
+          time: hourDataPoints[0].time,
+          temperature: Math.round((Math.min(...temps) + Math.max(...temps)) / 2), // Average of min and max
+          temperatureMin: Math.min(...temps),
+          temperatureMax: Math.max(...temps),
+          windSpeed: Math.max(...winds),
+          precipitationChance: Math.max(...precips),
+          humidity: Math.round(humidities.reduce((sum, h) => sum + h, 0) / humidities.length),
+          weatherCode: hourDataPoints[0].weatherCode,
+          isAggregated: true
+        });
+      }
+    }
+
+    return {
+      weatherData: aggregatedWeather,
+      coords: sampledPoints[0] ? {
+        lat: sampledPoints[0].lat,
+        lon: sampledPoints[0].lon,
+        name: 'GPX Route'
+      } : null
+    };
+  } catch (error) {
+    console.error('GPX weather fetch error:', error);
+    // Fallback to mock data if API fails
+    return { weatherData: generateMockWeather(['GPX Route'], startTime), coords: null };
+  }
+};
+
 // Fallback mock weather data generator
 const generateMockWeather = (locations, startTime) => {
   return Array.from({ length: 5 }, (_, i) => {
@@ -128,11 +191,22 @@ const generateMockWeather = (locations, startTime) => {
 
 // Clothing recommendation engine
 const generateRecommendations = (activity, weatherData, effortLevel, historicalFeedback = []) => {
-  const avgTemp = weatherData.reduce((sum, w) => sum + w.temperature, 0) / weatherData.length;
+  // For GPX routes with aggregated data, use minimum temperature for conservative recommendations
+  const isAggregated = weatherData.length > 0 && weatherData[0].isAggregated;
+  let avgTemp;
+
+  if (isAggregated) {
+    // Use the coldest temperature across all sampled points
+    avgTemp = Math.min(...weatherData.map(w => w.temperatureMin || w.temperature));
+  } else {
+    // Standard average for single location
+    avgTemp = weatherData.reduce((sum, w) => sum + w.temperature, 0) / weatherData.length;
+  }
+
   const maxWind = Math.max(...weatherData.map(w => w.windSpeed));
   const hasRain = weatherData.some(w => w.precipitationChance > 30);
   const effort = EFFORT_LEVELS.find(e => e.id === effortLevel);
-  
+
   // Adjust felt temperature based on effort
   const feltTemp = avgTemp + (effort.heatFactor - 1) * 15;
   
@@ -334,6 +408,12 @@ export default function WhatShouldIWear() {
   const [activeInputIndex, setActiveInputIndex] = useState(null);
   const [searchTimeout, setSearchTimeout] = useState(null);
 
+  // GPX-related state
+  const [inputMethod, setInputMethod] = useState('search');
+  const [gpxPoints, setGpxPoints] = useState([]);
+  const [sampledGpxPoints, setSampledGpxPoints] = useState([]);
+  const [gpxMetadata, setGpxMetadata] = useState(null);
+
   // Load saved routes on mount
   useEffect(() => {
     loadSavedRoutes();
@@ -432,20 +512,65 @@ export default function WhatShouldIWear() {
     setLocations(newLocations.length === 0 ? [''] : newLocations);
   };
 
+  const handleRouteChange = (routeData) => {
+    setInputMethod(routeData.inputMethod || 'search');
+    setLocations(routeData.locations || ['']);
+    setStartTime(routeData.startTime || '');
+
+    if (routeData.inputMethod === 'gpx' && routeData.gpxPoints) {
+      setGpxPoints(routeData.gpxPoints);
+      setGpxMetadata(routeData.gpxMetadata);
+
+      // Sample points for weather fetching (10-12 points)
+      const sampled = samplePoints(routeData.gpxPoints, 10);
+      setSampledGpxPoints(sampled);
+
+      // Set location coords to first point for map centering
+      if (sampled.length > 0) {
+        setLocationCoords({
+          lat: sampled[0].lat,
+          lon: sampled[0].lon,
+          name: routeData.gpxMetadata?.name || 'GPX Route'
+        });
+      }
+    } else {
+      setGpxPoints([]);
+      setSampledGpxPoints([]);
+      setGpxMetadata(null);
+    }
+  };
+
   const handleGetRecommendations = async () => {
-    const validLocations = locations.filter(loc => loc.trim());
-    if (!validLocations.length || !startTime || !selectedActivity || !selectedEffort) {
+    if (!startTime || !selectedActivity || !selectedEffort) {
       alert('Please fill in all fields');
       return;
     }
 
-    if (!locationCoords) {
-      alert('Please select a location from the dropdown suggestions');
-      return;
+    let weather, coords;
+
+    // Handle GPX mode
+    if (inputMethod === 'gpx' && sampledGpxPoints.length > 0) {
+      const result = await fetchGPXWeatherData(sampledGpxPoints, startTime);
+      weather = result.weatherData;
+      coords = result.coords;
+    } else {
+      // Handle search mode
+      const validLocations = locations.filter(loc => loc.trim());
+      if (!validLocations.length) {
+        alert('Please enter a location');
+        return;
+      }
+
+      if (!locationCoords) {
+        alert('Please select a location from the dropdown suggestions');
+        return;
+      }
+
+      const result = await fetchWeatherData(validLocations, startTime, locationCoords);
+      weather = result.weatherData;
+      coords = result.coords;
     }
 
-    // Fetch weather data using stored coordinates
-    const { weatherData: weather, coords } = await fetchWeatherData(validLocations, startTime, locationCoords);
     setWeatherData(weather);
     // Update coords in case they changed
     if (coords) {
@@ -552,121 +677,8 @@ export default function WhatShouldIWear() {
               <>
                 {/* Route Input */}
                 <div style={{ marginBottom: '40px' }}>
-                  <h2 style={{ fontSize: '1.8rem', marginBottom: '20px', color: '#333' }}>2. Enter Your Location</h2>
-                  {locations.map((location, index) => (
-                    <div key={index} style={{ position: 'relative', marginBottom: '10px' }}>
-                      <div style={{ display: 'flex', gap: '10px' }}>
-                        <div style={{ flex: 1, position: 'relative' }}>
-                          <input
-                            type="text"
-                            placeholder="Start typing a city name..."
-                            value={location}
-                            onChange={(e) => handleLocationChange(index, e.target.value)}
-                            onFocus={() => setActiveInputIndex(index)}
-                            style={{
-                              width: '100%',
-                              padding: '12px',
-                              border: '2px solid #e0e0e0',
-                              borderRadius: '8px',
-                              fontSize: '1rem',
-                              boxSizing: 'border-box'
-                            }}
-                          />
-                          {/* Autocomplete Dropdown */}
-                          {activeInputIndex === index && locationSuggestions.length > 0 && (
-                            <div style={{
-                              position: 'absolute',
-                              top: '100%',
-                              left: 0,
-                              right: 0,
-                              background: 'white',
-                              border: '2px solid #667eea',
-                              borderRadius: '8px',
-                              marginTop: '4px',
-                              maxHeight: '200px',
-                              overflowY: 'auto',
-                              zIndex: 1000,
-                              boxShadow: '0 4px 12px rgba(0,0,0,0.15)'
-                            }}>
-                              {locationSuggestions.map((suggestion, suggIndex) => (
-                                <div
-                                  key={suggIndex}
-                                  onClick={() => selectLocationSuggestion(index, suggestion)}
-                                  style={{
-                                    padding: '12px',
-                                    cursor: 'pointer',
-                                    borderBottom: suggIndex < locationSuggestions.length - 1 ? '1px solid #f0f0f0' : 'none',
-                                    transition: 'background 0.2s'
-                                  }}
-                                  onMouseEnter={(e) => e.currentTarget.style.background = '#f5f5f5'}
-                                  onMouseLeave={(e) => e.currentTarget.style.background = 'white'}
-                                >
-                                  <div style={{ fontWeight: '600', color: '#333' }}>
-                                    {suggestion.name}
-                                  </div>
-                                  <div style={{ fontSize: '0.85rem', color: '#666' }}>
-                                    {suggestion.admin1 && `${suggestion.admin1}, `}{suggestion.country}
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                        {locations.length > 1 && (
-                          <button
-                            onClick={() => handleRemoveLocation(index)}
-                            style={{
-                              padding: '12px 16px',
-                              background: '#ff4444',
-                              color: 'white',
-                              border: 'none',
-                              borderRadius: '8px',
-                              cursor: 'pointer',
-                              fontSize: '1rem'
-                            }}
-                          >
-                            ✕
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                  {locations.length < 3 && (
-                    <button
-                      onClick={handleAddLocation}
-                      style={{
-                        width: '100%',
-                        padding: '12px',
-                        background: 'white',
-                        border: '2px dashed #667eea',
-                        borderRadius: '8px',
-                        color: '#667eea',
-                        cursor: 'pointer',
-                        fontSize: '1rem',
-                        marginTop: '10px'
-                      }}
-                    >
-                      + Add Location (max 3)
-                    </button>
-                  )}
-                  
-                  <div style={{ marginTop: '20px' }}>
-                    <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600', color: '#333' }}>
-                      Start Time
-                    </label>
-                    <input
-                      type="datetime-local"
-                      value={startTime}
-                      onChange={(e) => setStartTime(e.target.value)}
-                      style={{
-                        width: '100%',
-                        padding: '12px',
-                        border: '2px solid #e0e0e0',
-                        borderRadius: '8px',
-                        fontSize: '1rem'
-                      }}
-                    />
-                  </div>
+                  <h2 style={{ fontSize: '1.8rem', marginBottom: '20px', color: '#333' }}>2. Enter Your Location or Upload GPX</h2>
+                  <RouteInput onRouteChange={handleRouteChange} />
                 </div>
 
                 {/* Effort Level */}
@@ -784,9 +796,12 @@ export default function WhatShouldIWear() {
 
         {/* Weather Chart */}
         <div style={{ background: 'white', borderRadius: '20px', padding: '30px', marginBottom: '20px', boxShadow: '0 2px 10px rgba(0,0,0,0.1)' }}>
-          <h2 style={{ fontSize: '1.8rem', marginBottom: '20px', color: '#333' }}>Weather Forecast (5 Hours from Start)</h2>
+          <h2 style={{ fontSize: '1.8rem', marginBottom: '20px', color: '#333' }}>
+            Weather Forecast (5 Hours from Start)
+            {inputMethod === 'gpx' && <span style={{ fontSize: '1rem', color: '#667eea', marginLeft: '10px' }}>• Route Range</span>}
+          </h2>
           <ResponsiveContainer width="100%" height={300}>
-            <LineChart data={weatherData}>
+            <ComposedChart data={weatherData}>
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis
                 dataKey="time"
@@ -798,16 +813,61 @@ export default function WhatShouldIWear() {
                 labelFormatter={(time) => new Date(time).toLocaleString()}
                 formatter={(value, name) => {
                   if (name === 'temperature') return [value, 'Temp (°F)'];
+                  if (name === 'temperatureMin') return [value, 'Min Temp (°F)'];
+                  if (name === 'temperatureMax') return [value, 'Max Temp (°F)'];
                   if (name === 'windSpeed') return [value, 'Wind (mph)'];
                   if (name === 'precipitationChance') return [value + '%', 'Precip Chance'];
                   return [value, name];
                 }}
               />
               <Legend />
-              <Line yAxisId="left" type="monotone" dataKey="temperature" stroke="#ff6b6b" strokeWidth={2} name="Temperature" />
+
+              {/* Temperature display - range for GPX, single line for search */}
+              {inputMethod === 'gpx' && weatherData.length > 0 && weatherData[0].isAggregated ? (
+                <>
+                  <Area
+                    yAxisId="left"
+                    type="monotone"
+                    dataKey="temperatureMax"
+                    stroke="#ff8888"
+                    fill="#ff6b6b"
+                    fillOpacity={0.3}
+                    name="Max Temp"
+                  />
+                  <Area
+                    yAxisId="left"
+                    type="monotone"
+                    dataKey="temperatureMin"
+                    stroke="#ff4444"
+                    fill="#ffffff"
+                    fillOpacity={0.5}
+                    name="Min Temp"
+                  />
+                  <Line
+                    yAxisId="left"
+                    type="monotone"
+                    dataKey="temperature"
+                    stroke="#ff6b6b"
+                    strokeWidth={2}
+                    strokeDasharray="3 3"
+                    name="Avg Temp"
+                    dot={false}
+                  />
+                </>
+              ) : (
+                <Line
+                  yAxisId="left"
+                  type="monotone"
+                  dataKey="temperature"
+                  stroke="#ff6b6b"
+                  strokeWidth={2}
+                  name="Temperature"
+                />
+              )}
+
               <Line yAxisId="right" type="monotone" dataKey="windSpeed" stroke="#4ecdc4" strokeWidth={2} name="Wind Speed" />
               <Line yAxisId="right" type="monotone" dataKey="precipitationChance" stroke="#3b82f6" strokeWidth={2} name="Precip Chance %" strokeDasharray="5 5" />
-            </LineChart>
+            </ComposedChart>
           </ResponsiveContainer>
         </div>
 
@@ -818,18 +878,49 @@ export default function WhatShouldIWear() {
             {locationCoords ? (
               <MapContainer
                 center={[locationCoords.lat, locationCoords.lon]}
-                zoom={12}
+                zoom={inputMethod === 'gpx' && gpxPoints.length > 0 ? 10 : 12}
                 style={{ height: '100%', width: '100%' }}
-                key={`${locationCoords.lat}-${locationCoords.lon}`}
+                key={`${locationCoords.lat}-${locationCoords.lon}-${inputMethod}`}
               >
                 <TileLayer
                   attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
                   url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                 />
                 <MapUpdater center={[locationCoords.lat, locationCoords.lon]} />
-                <Marker position={[locationCoords.lat, locationCoords.lon]}>
-                  <Popup>{locationCoords.name}</Popup>
-                </Marker>
+
+                {inputMethod === 'gpx' && gpxPoints.length > 0 ? (
+                  <>
+                    {/* Full GPX route polyline */}
+                    <Polyline
+                      positions={gpxPoints.map(p => [p.lat, p.lon])}
+                      color="#667eea"
+                      weight={3}
+                      opacity={0.7}
+                    />
+                    {/* Sampled weather points as circle markers */}
+                    {sampledGpxPoints.map((point, idx) => (
+                      <CircleMarker
+                        key={idx}
+                        center={[point.lat, point.lon]}
+                        radius={8}
+                        fillColor="#ff6b6b"
+                        color="white"
+                        weight={2}
+                        fillOpacity={0.8}
+                      >
+                        <Popup>
+                          <strong>Point {idx + 1}</strong><br />
+                          {point.name || `Lat: ${point.lat.toFixed(4)}, Lon: ${point.lon.toFixed(4)}`}
+                        </Popup>
+                      </CircleMarker>
+                    ))}
+                  </>
+                ) : (
+                  /* Single location marker for search mode */
+                  <Marker position={[locationCoords.lat, locationCoords.lon]}>
+                    <Popup>{locationCoords.name}</Popup>
+                  </Marker>
+                )}
               </MapContainer>
             ) : (
               <div style={{

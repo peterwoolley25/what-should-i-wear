@@ -1,11 +1,14 @@
 import React, { useState } from 'react'
 import './RouteInput.css'
+import { parseGPXFile } from '../utils/gpxParser'
 
 function RouteInput({ onRouteChange }) {
   const [inputMethod, setInputMethod] = useState('search')
   const [locations, setLocations] = useState([''])
   const [startTime, setStartTime] = useState('')
   const [gpxFile, setGpxFile] = useState(null)
+  const [isParsingGPX, setIsParsingGPX] = useState(false)
+  const [gpxError, setGpxError] = useState(null)
 
   const handleAddLocation = () => {
     if (locations.length < 3) {
@@ -26,15 +29,54 @@ function RouteInput({ onRouteChange }) {
     onRouteChange({ locations: newLocations, startTime, gpxFile })
   }
 
-  const handleFileUpload = (e) => {
+  const handleFileUpload = async (e) => {
     const file = e.target.files[0]
-    setGpxFile(file)
-    onRouteChange({ locations, startTime, gpxFile: file })
+    if (!file) return
+
+    // File size check (5MB limit)
+    if (file.size > 5 * 1024 * 1024) {
+      setGpxError('File too large. Please upload a GPX file smaller than 5MB.')
+      setGpxFile(null)
+      return
+    }
+
+    setIsParsingGPX(true)
+    setGpxError(null)
+
+    try {
+      const { points, metadata } = await parseGPXFile(file)
+      setGpxFile(file)
+      onRouteChange({
+        locations,
+        startTime,
+        gpxFile: file,
+        gpxPoints: points,
+        gpxMetadata: metadata,
+        inputMethod: 'gpx'
+      })
+    } catch (error) {
+      setGpxError(error.message)
+      setGpxFile(null)
+      onRouteChange({ locations, startTime, gpxFile: null, inputMethod: 'search' })
+    } finally {
+      setIsParsingGPX(false)
+    }
   }
 
   const handleStartTimeChange = (e) => {
     setStartTime(e.target.value)
-    onRouteChange({ locations, startTime: e.target.value, gpxFile })
+    onRouteChange({ locations, startTime: e.target.value, gpxFile, inputMethod })
+  }
+
+  const handleInputMethodChange = (method) => {
+    setInputMethod(method)
+    setGpxError(null)
+    onRouteChange({
+      locations,
+      startTime,
+      gpxFile: method === 'gpx' ? gpxFile : null,
+      inputMethod: method
+    })
   }
 
   return (
@@ -42,15 +84,15 @@ function RouteInput({ onRouteChange }) {
       <h2>Route & Timing</h2>
       
       <div className="input-method-toggle">
-        <button 
+        <button
           className={inputMethod === 'search' ? 'active' : ''}
-          onClick={() => setInputMethod('search')}
+          onClick={() => handleInputMethodChange('search')}
         >
           Search Locations
         </button>
-        <button 
+        <button
           className={inputMethod === 'gpx' ? 'active' : ''}
-          onClick={() => setInputMethod('gpx')}
+          onClick={() => handleInputMethodChange('gpx')}
         >
           Upload GPX
         </button>
@@ -85,8 +127,21 @@ function RouteInput({ onRouteChange }) {
         </div>
       ) : (
         <div className="gpx-upload">
+          {gpxError && (
+            <div style={{
+              padding: '15px',
+              background: '#ffebee',
+              border: '2px solid #f44336',
+              borderRadius: '8px',
+              color: '#d32f2f',
+              marginBottom: '15px',
+              fontSize: '0.95rem'
+            }}>
+              {gpxError}
+            </div>
+          )}
           <label htmlFor="gpx-file" className="gpx-label">
-            {gpxFile ? `📁 ${gpxFile.name}` : '📁 Choose GPX File'}
+            {isParsingGPX ? '⏳ Parsing GPX file...' : gpxFile ? `📁 ${gpxFile.name}` : '📁 Choose GPX File'}
           </label>
           <input
             id="gpx-file"
@@ -94,6 +149,7 @@ function RouteInput({ onRouteChange }) {
             accept=".gpx"
             onChange={handleFileUpload}
             className="gpx-input"
+            disabled={isParsingGPX}
           />
         </div>
       )}

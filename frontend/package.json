@@ -16,6 +16,7 @@
   "license": "ISC",
   "dependencies": {
     "date-fns": "^4.1.0",
+    "gpxparser": "^3.0.8",
     "leaflet": "^1.9.4",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
