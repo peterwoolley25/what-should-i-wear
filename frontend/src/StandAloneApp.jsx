@@ -513,16 +513,20 @@ export default function WhatShouldIWear() {
   };
 
   const handleRouteChange = (routeData) => {
+    console.log('handleRouteChange called with:', routeData);
+
     setInputMethod(routeData.inputMethod || 'search');
     setLocations(routeData.locations || ['']);
     setStartTime(routeData.startTime || '');
 
     if (routeData.inputMethod === 'gpx' && routeData.gpxPoints) {
+      console.log('GPX mode detected, gpxPoints:', routeData.gpxPoints.length);
       setGpxPoints(routeData.gpxPoints);
       setGpxMetadata(routeData.gpxMetadata);
 
       // Sample points for weather fetching (10-12 points)
       const sampled = samplePoints(routeData.gpxPoints, 10);
+      console.log('Sampled points:', sampled.length);
       setSampledGpxPoints(sampled);
 
       // Set location coords to first point for map centering
@@ -534,6 +538,7 @@ export default function WhatShouldIWear() {
         });
       }
     } else {
+      console.log('Search mode or no GPX points');
       setGpxPoints([]);
       setSampledGpxPoints([]);
       setGpxMetadata(null);
@@ -737,6 +742,17 @@ export default function WhatShouldIWear() {
                     </div>
                   </div>
                 )}
+
+                {/* Debug info */}
+                {console.log('Button state check:', {
+                  selectedActivity,
+                  selectedEffort,
+                  startTime,
+                  inputMethod,
+                  sampledGpxPointsLength: sampledGpxPoints.length,
+                  locationsHasValue: locations.some(l => l.trim()),
+                  shouldDisable: !selectedActivity || !selectedEffort || !startTime || (inputMethod === 'gpx' ? sampledGpxPoints.length === 0 : !locations.some(l => l.trim()))
+                })}
 
                 <button
                   onClick={handleGetRecommendations}
